@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<meta name="theme-color" content="#faf8f5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Acesso</title>
+<style>
+:root{color-scheme:light;--bg:#faf8f5;--card:#fff;--ink:#1c242b;--muted:#5c6670;--line:#e6e1d8;--acc:#9a5b13;--acc2:#b45309}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;min-height:100svh}
+[hidden]{display:none!important}
+img{max-width:100%}
+.gate-wrap{min-height:100svh;display:grid;place-items:center;padding:24px}
+.gate{width:100%;max-width:360px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:28px 24px;box-shadow:0 12px 32px rgba(28,36,43,.06);display:flex;flex-direction:column;gap:14px}
+.gate h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em}
+.gate label{font-size:14px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+.gate input[type=password],.gate input[type=text]{width:100%;padding:13px 14px;font-size:18px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);outline:none}
+.gate input:focus{border-color:var(--acc2)}
+.gate .chk{flex-direction:row;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:var(--ink)}
+.gate .chk input{width:18px;height:18px;accent-color:var(--acc2)}
+.gate button{padding:13px 16px;border:0;border-radius:12px;background:var(--ink);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+.gate button:disabled{opacity:.6;cursor:default}
+.gate .err{margin:0;color:#b91c1c;font-size:14px}
+</style>
+</head>
+<body>
+<div id="app" class="app"></div>
+<script>
+(() => {
+  'use strict';
+  const CFG = { iter: 600000, sal: "EBwhc2xllU7x5Uc41QDyBQ==" };
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const para64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+  // Captura token do fragmento #k=... (nunca enviado ao servidor) e limpa da barra de endereço
+  const extrairToken = () => {
+    const h = location.hash || '';
+    const m = h.match(/(?:^#|&)k=([A-Za-z0-9_-]{16,})/);
+    if (m) {
+      try { localStorage.setItem('sr:tok', m[1]); } catch (e) {}
+      history.replaceState(null, '', location.pathname + '#/curso');
+      return m[1];
+    }
+    try { return localStorage.getItem('sr:tok') || ''; } catch (e) { return ''; }
+  };
+  let tok = extrairToken();
+
+  const decBytes = async (chave, buf) => {
+    const u = new Uint8Array(buf);
+    const iv = u.subarray(0, 12);
+    const body = u.subarray(12);
+    return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, chave, body);
+  };
+
+  const derivar = async (senha, token) => {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(senha + ':' + token), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(CFG.sal), iterations: CFG.iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+  };
+
+  let appBinPromise = null;
+  const baixarApp = () => (appBinPromise || (appBinPromise = fetch('app.bin', { cache: 'no-cache' }).then((r) => { if (!r.ok) throw new Error('http'); return r.arrayBuffer(); })));
+
+  const abrir = async (chave) => {
+    const buf = await baixarApp();
+    const plain = await decBytes(chave, buf);
+    const pkg = JSON.parse(new TextDecoder().decode(plain));
+
+    // Cache de áudios decifrados em memória (Blob URLs)
+    const cacheAudio = new Map();
+    window.__srDecifrarAudio = (url) => {
+      if (cacheAudio.has(url)) return cacheAudio.get(url);
+      const p = fetch(url).then((r) => { if (!r.ok) throw new Error('audio'); return r.arrayBuffer(); })
+        .then((ab) => decBytes(chave, ab))
+        .then((dec) => URL.createObjectURL(new Blob([dec], { type: 'audio/mp4' })));
+      p.catch(() => cacheAudio.delete(url));
+      cacheAudio.set(url, p);
+      return p;
+    };
+
+    // Carrega fonte serifada, CSS e inicia o app
+    const lk = document.createElement('link');
+    lk.rel = 'stylesheet';
+    lk.href = 'https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap';
+    document.head.append(lk);
+    const st = document.createElement('style');
+    st.textContent = pkg.css;
+    document.head.append(st);
+    document.title = pkg.titulo;
+    document.getElementById('app').replaceChildren();
+    const sc = document.createElement('script');
+    sc.textContent = pkg.js;
+    document.head.append(sc);
+    window[pkg.init](pkg.dados);
+  };
+
+  const mostrarPortao = (msg) => {
+    const raiz = document.getElementById('app');
+    raiz.innerHTML = '<div class="gate-wrap"><form class="gate" autocomplete="off">'
+      + '<h1>Acesso privado</h1>'
+      + '<label>Senha<input id="pw" type="password" inputmode="numeric" autocomplete="off" maxlength="64" required></label>'
+      + '<label class="chk"><input id="lembrar" type="checkbox" checked><span>Lembrar neste aparelho</span></label>'
+      + '<button type="submit">Entrar</button>'
+      + '<p class="err" role="alert" hidden></p>'
+      + '</form></div>';
+    const form = raiz.querySelector('form'), pw = raiz.querySelector('#pw'), err = raiz.querySelector('.err'), btn = raiz.querySelector('button');
+    if (msg) { err.textContent = msg; err.hidden = false; }
+    setTimeout(() => pw.focus(), 40);
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      err.hidden = true; btn.disabled = true; btn.textContent = 'Abrindo…';
+      try {
+        if (!tok) tok = extrairToken();
+        if (!tok) throw new Error('sem-token');
+        const chave = await derivar(pw.value.trim(), tok);
+        const lembrar = raiz.querySelector('#lembrar').checked;
+        await abrir(chave);
+        if (lembrar) {
+          try { localStorage.setItem('sr:chave_web', para64(await crypto.subtle.exportKey('raw', chave))); } catch (e) {}
+        }
+      } catch (e) {
+        err.textContent = e && e.message === 'sem-token'
+          ? 'Abra pelo link completo privado na primeira vez neste aparelho.'
+          : 'Senha errada. Tente de novo.';
+        err.hidden = false; btn.disabled = false; btn.textContent = 'Entrar'; pw.select();
+      }
+    });
+  };
+
+  const lembrada = (() => { try { return localStorage.getItem('sr:chave_web'); } catch (e) { return null; } })();
+  if (lembrada) {
+    crypto.subtle.importKey('raw', b64(lembrada), 'AES-GCM', false, ['decrypt'])
+      .then(abrir)
+      .catch(() => { try { localStorage.removeItem('sr:chave_web'); } catch (e) {} mostrarPortao(); });
+  } else {
+    mostrarPortao();
+  }
+})();
+</script>
+</body>
+</html>
